@@ -40,7 +40,7 @@ winpcap is not installed.
 ## セットアップ
 
 ```powershell
-cd C:\Users\gpu_win\Tools\wifi-presence-monitor
+cd path\to\wifi-presence-monitor
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -63,7 +63,7 @@ copy excluded_macs.example.json excluded_macs.json
 **管理者権限**の PowerShell で:
 
 ```powershell
-cd C:\Users\gpu_win\Tools\wifi-presence-monitor
+cd path\to\wifi-presence-monitor
 .\venv\Scripts\Activate.ps1
 python main.py
 ```

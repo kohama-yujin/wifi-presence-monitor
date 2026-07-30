@@ -387,26 +387,19 @@ def start_monitoring(
     name: str,
     grade: str,
     ip: str,
-    mac: str | None = None,
 ) -> bool | str:
     """監視開始・当日レコード更新。除外 MAC なら False。上限超過なら 'full'。"""
-    mac_n = normalize_mac(mac) if mac else None
-    if is_excluded_mac(mac_n):
-        log.info("%s ignored excluded mac=%s", name, mac_n)
-        return False
+    # MAC は POST では受け取らず、ARP でのみ取得する
+    try:
+        learned = arp_request(ip)
+    except Exception:
+        log.exception("ARP probe failed on connect ip=%s", ip)
+        learned = None
 
-    # body に MAC が無い場合は ARP で先に確認し、除外なら表に出さず拒否する
-    if not mac_n:
-        try:
-            learned = arp_request(ip)
-        except Exception:
-            log.exception("ARP probe failed on connect ip=%s", ip)
-            learned = None
-        if learned:
-            if is_excluded_mac(learned):
-                log.info("%s ignored excluded mac=%s (arp on connect)", name, learned)
-                return False
-            mac_n = learned
+    mac_n = normalize_mac(learned) if learned else None
+    if is_excluded_mac(mac_n):
+        log.info("%s ignored excluded mac=%s (arp on connect)", name, mac_n)
+        return False
 
     grade_n = normalize_grade(grade)
     key = _make_key(ip, mac_n)

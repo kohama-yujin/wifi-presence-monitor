@@ -21,7 +21,7 @@ def wifi_connected():
     data = request.get_json(silent=True) or {}
     name = data.get("name")
     grade = data.get("grade")
-    mac = data.get("mac")
+    # mac は受け付けない（ARP でのみ取得）
 
     if not name or not grade:
         return jsonify({
@@ -30,7 +30,7 @@ def wifi_connected():
             "message": "name と grade は必須です",
         }), 400
 
-    result = start_monitoring(name, grade, request.remote_addr, mac)
+    result = start_monitoring(name, grade, request.remote_addr)
     if result is False:
         return jsonify({
             "ok": True,

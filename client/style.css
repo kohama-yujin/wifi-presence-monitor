@@ -1,0 +1,192 @@
+:root {
+  --ink: #1c2420;
+  --muted: #5e6a64;
+  --line: rgba(28, 36, 32, 0.12);
+  --bg: #f3f1eb;
+  --teacher: #e2e2e0;
+  --teacher-ink: #4a4a48;
+  --m2: #d7e8f5;
+  --m2-ink: #1e4b6e;
+  --m1: #e8d7b0;
+  --m1-ink: #6a4e1a;
+  --b4: #d8ecda;
+  --b4-ink: #2a5c34;
+  --other: #f3d9d6;
+  --other-ink: #6e322c;
+  --present: #1f6b45;
+  --away: #7a4a32;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  font-family: "IBM Plex Sans JP", sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(900px 500px at 0% 0%, #fff9ef 0%, transparent 55%),
+    radial-gradient(800px 480px at 100% 0%, #e7eef5 0%, transparent 50%),
+    var(--bg);
+}
+
+.top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1.5rem;
+  padding: clamp(1.25rem, 3vw, 2rem) clamp(1.25rem, 4vw, 2.5rem) 0.5rem;
+}
+
+.top-left {
+  min-width: 0;
+}
+
+.title {
+  margin: 0;
+  font-family: "Shippori Mincho", serif;
+  font-size: clamp(2rem, 5vw, 3rem);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.15;
+}
+
+.subtitle {
+  margin: 0.45rem 0 0;
+  color: var(--muted);
+  font-size: 0.98rem;
+}
+
+.top-right {
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.clock-date {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.clock-time {
+  margin: 0.15rem 0 0;
+  font-family: "Shippori Mincho", serif;
+  font-size: clamp(1.4rem, 3vw, 2rem);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.boards {
+  display: grid;
+  gap: 1.25rem;
+  padding: 1rem clamp(1.25rem, 4vw, 2.5rem) 2.5rem;
+}
+
+.board {
+  border-radius: 0;
+  padding: 0.9rem 1rem 1rem;
+  animation: rise 0.55s ease both;
+}
+
+.board[data-grade="Teacher"] {
+  background: var(--teacher);
+  color: var(--teacher-ink);
+}
+
+.board[data-grade="M2"] {
+  background: var(--m2);
+  color: var(--m2-ink);
+}
+
+.board[data-grade="M1"] {
+  background: var(--m1);
+  color: var(--m1-ink);
+}
+
+.board[data-grade="B4"] {
+  background: var(--b4);
+  color: var(--b4-ink);
+}
+
+.board[data-grade="other"] {
+  background: var(--other);
+  color: var(--other-ink);
+}
+
+.board-title {
+  margin: 0 0 0.65rem;
+  font-family: "Shippori Mincho", serif;
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.board table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+.board th,
+.board td {
+  padding: 0.45rem 0.5rem;
+  text-align: left;
+  border-top: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.board th {
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: none;
+  opacity: 0.8;
+  border-top: none;
+}
+
+.board td.status-present {
+  color: var(--present);
+  font-weight: 700;
+}
+
+.board td.status-away {
+  color: var(--away);
+  font-weight: 700;
+}
+
+.board .empty {
+  margin: 0.2rem 0 0;
+  opacity: 0.7;
+  font-size: 0.9rem;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 720px) {
+  .top {
+    flex-direction: column;
+  }
+
+  .top-right {
+    text-align: left;
+  }
+
+  .board {
+    overflow-x: auto;
+  }
+}

@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>在室管理</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;600;700&family=Shippori+Mincho:wght@600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/client/style.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div class="top-left">
+        <h1 class="title">在室管理</h1>
+        <p id="subtitle" class="subtitle">更新間隔を読み込み中…</p>
+      </div>
+      <div class="top-right">
+        <p id="clock-date" class="clock-date">—</p>
+        <p id="clock-time" class="clock-time">—</p>
+      </div>
+    </header>
+
+    <main id="boards" class="boards" aria-live="polite"></main>
+
+    <script src="/client/app.js"></script>
+  </body>
+</html>

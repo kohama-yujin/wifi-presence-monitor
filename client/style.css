@@ -14,6 +14,7 @@
   --other: #f3d9d6;
   --other-ink: #6e322c;
   --present: #1f6b45;
+  --uncertain: #8a6a12;
   --away: #7a4a32;
 }
 
@@ -61,6 +62,69 @@ body {
   margin: 0.45rem 0 0;
   color: var(--muted);
   font-size: 0.98rem;
+}
+
+.date-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin: 0.55rem 0 0;
+}
+
+.date-nav-btn {
+  margin: 0;
+  padding: 0.15rem 0.55rem;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 1.05rem;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.date-nav-btn:hover:not(:disabled) {
+  background: transparent;
+  opacity: 0.65;
+}
+
+.date-nav-btn:disabled {
+  opacity: 0.28;
+  cursor: default;
+}
+
+.view-date {
+  margin: 0;
+  min-width: 11rem;
+  text-align: center;
+  font-family: "Shippori Mincho", serif;
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.nav-links {
+  margin: 0.55rem 0 0;
+  font-size: 0.9rem;
+}
+
+.nav-links a {
+  color: var(--m2-ink);
+  text-underline-offset: 0.15em;
+}
+
+.history-empty {
+  margin: 1rem clamp(1.25rem, 4vw, 2.5rem);
+  color: var(--muted);
+  font-size: 1rem;
+}
+
+.rules {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.45;
+  white-space: pre-line;
 }
 
 .top-right {
@@ -155,8 +219,17 @@ body {
   font-weight: 700;
 }
 
+.board td.status-uncertain {
+  color: var(--uncertain);
+  font-weight: 700;
+}
+
 .board td.status-away {
   color: var(--away);
+  font-weight: 700;
+}
+
+.board tr.row-present {
   font-weight: 700;
 }
 

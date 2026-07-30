@@ -2,7 +2,7 @@ import json
 import logging
 import threading
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from app.arp import arp_request
 from app.config import (
@@ -10,7 +10,6 @@ from app.config import (
     GRADE_ORDER,
     MAX_TARGETS,
     MISS_THRESHOLD_COUNT,
-    PRESENCE_CREDIT_SECONDS,
     STATE_DIR,
     is_excluded_mac,
     normalize_grade,
@@ -25,6 +24,15 @@ _lock = threading.Lock()
 _targets: dict[str, dict] = {}
 _day: str = date.today().isoformat()
 _loop_started = False
+_last_check_at: str | None = None
+_next_check_at: str | None = None
+_revision: int = 0
+
+
+def _bump_revision_unlocked() -> None:
+    """画面側に反映が必要な状態変化を通知する。"""
+    global _revision
+    _revision += 1
 
 
 def _now() -> datetime:
@@ -72,6 +80,7 @@ def _target_payload(t: dict) -> dict:
         "left_at": t.get("left_at"),
         "total_present_seconds": t["total_present_seconds"],
         "last_credit_at": t["last_credit_at"],
+        "last_seen_at": t.get("last_seen_at"),
         "confirmed": bool(t.get("confirmed", True)),
     }
 
@@ -90,13 +99,90 @@ def _save_unlocked() -> None:
     )
 
 
-def _mark_absent(current: dict, now: datetime, reason: str) -> None:
+def _parse_dt(value: str | None, tz) -> datetime | None:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=tz)
+    return dt
+
+
+def _estimated_leave_at(now: datetime, current: dict | None = None) -> datetime:
+    """
+    連続ミスで不在と判定したとき、実際の帰宅は「最後に ARP 応答があった時刻」。
+    例: 3:00 在室 → 3:01 不在かも → 3:02 不在 なら帰宅・総在室は 3:00。
+    last_seen_at が無い旧データだけ、判定時刻から閾値×間隔でさかのぼる。
+    """
+    if current is not None:
+        last_seen = _parse_dt(current.get("last_seen_at"), now.tzinfo)
+        if last_seen is not None:
+            return last_seen
+    lag = MISS_THRESHOLD_COUNT * CHECK_INTERVAL_SECONDS
+    return now - timedelta(seconds=lag)
+
+
+def _sync_credit_to(current: dict, until: datetime) -> None:
+    """
+    総在室を until 時点までに揃える。
+    未加算分は加算し、不在かも？期間などで超過していれば差し戻す。
+    """
+    if not current["present"]:
+        return
+    last_dt = _parse_dt(current.get("last_credit_at"), until.tzinfo)
+    if last_dt is None:
+        current["last_credit_at"] = until.isoformat()
+        return
+
+    delta = (until - last_dt).total_seconds()
+    if abs(delta) < 1e-6:
+        return
+
+    if delta > 0:
+        credits = int(delta // CHECK_INTERVAL_SECONDS)
+        if credits <= 0:
+            return
+        current["total_present_seconds"] += credits * CHECK_INTERVAL_SECONDS
+        advanced = last_dt.timestamp() + credits * CHECK_INTERVAL_SECONDS
+        current["last_credit_at"] = datetime.fromtimestamp(
+            advanced, tz=last_dt.tzinfo
+        ).isoformat()
+        return
+
+    # さかのぼり: 超過した間隔ぶんを差し戻す
+    over = int(round((-delta) / CHECK_INTERVAL_SECONDS))
+    if over > 0:
+        current["total_present_seconds"] = max(
+            0,
+            current["total_present_seconds"] - over * CHECK_INTERVAL_SECONDS,
+        )
+    current["last_credit_at"] = until.isoformat()
+
+
+def _mark_absent(
+    current: dict,
+    now: datetime,
+    reason: str,
+    *,
+    backdate_misses: bool = False,
+) -> None:
     """在室者から不在になったときの処理。"""
+    leave_at = _estimated_leave_at(now, current) if backdate_misses else now
+
+    # 到着より前にはしない
+    arrived_dt = _parse_dt(current.get("arrived_at"), now.tzinfo)
+    if arrived_dt is not None and leave_at < arrived_dt:
+        leave_at = arrived_dt
+
     if current["present"]:
-        _credit_if_due(current, now)
-        current["left_at"] = now.isoformat()
+        # 総在室も帰宅推定時刻までに揃える（超過分は差し戻す）
+        _sync_credit_to(current, leave_at)
+        current["left_at"] = leave_at.isoformat()
     current["present"] = False
-    log.info("%s absent (%s)", current["name"], reason)
+    log.info("%s absent (%s) left_at=%s", current["name"], reason, current.get("left_at"))
 
 
 def _mark_present(current: dict, now: datetime) -> None:
@@ -105,6 +191,7 @@ def _mark_present(current: dict, now: datetime) -> None:
     current["present"] = True
     current["left_at"] = None  # 再接続・復帰時は帰宅をクリア
     current["misses"] = 0
+    current["last_seen_at"] = now.isoformat()
     # 不在→在室のときだけ起点を戻す（在室中の再通知では継続）
     if not was_present or not current.get("last_credit_at"):
         current["last_credit_at"] = now.isoformat()
@@ -119,6 +206,8 @@ def _reset_day_unlocked() -> None:
     _targets.clear()
     log.info("day rolled over -> %s (memory reset, history kept)", _day)
     _save_unlocked()
+    # /status 経由のロールオーバーでも revision 駆動の画面を即更新する
+    _bump_revision_unlocked()
 
 
 def _ensure_today_unlocked() -> None:
@@ -142,6 +231,8 @@ def _hydrate_target(key: str, t: dict) -> dict:
         "left_at": t.get("left_at"),
         "total_present_seconds": int(t.get("total_present_seconds") or 0),
         "last_credit_at": t.get("last_credit_at"),
+        # 旧データに無ければ None → 不在時は判定時刻からさかのぼり推定
+        "last_seen_at": t.get("last_seen_at"),
         "confirmed": bool(t.get("confirmed", True)),
     }
 
@@ -194,6 +285,9 @@ def get_status() -> dict:
     """
     with _lock:
         _ensure_today_unlocked()
+        last_check = _last_check_at
+        next_check = _next_check_at
+        revision = _revision
         targets = [
             _public(t)
             for t in _targets.values()
@@ -209,10 +303,79 @@ def get_status() -> dict:
 
     return {
         "date": _today(),
+        "revision": revision,
+        "last_check_at": last_check,
+        "next_check_at": next_check,
         "check_interval_seconds": CHECK_INTERVAL_SECONDS,
-        "presence_credit_seconds": PRESENCE_CREDIT_SECONDS,
+        "miss_threshold_count": MISS_THRESHOLD_COUNT,
         "count": len(targets),
         "max_targets": MAX_TARGETS,
+        "grades": GRADE_ORDER,
+        "by_grade": by_grade,
+        "targets": targets,
+    }
+
+
+def list_history_dates() -> list[str]:
+    """
+    data/presence にある過去日の一覧（当日は含めない）。新しい順。
+    """
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    today = _today()
+    dates: list[str] = []
+    for path in STATE_DIR.glob("*.json"):
+        day = path.stem
+        if day == today:
+            continue
+        try:
+            date.fromisoformat(day)
+        except ValueError:
+            continue
+        dates.append(day)
+    dates.sort(reverse=True)
+    return dates
+
+
+def get_history(day: str) -> dict | None:
+    """
+    指定日の在室記録をファイルから返す。当日・不正・未存在なら None。
+    """
+    today = _today()
+    try:
+        date.fromisoformat(day)
+    except ValueError:
+        return None
+    if day == today:
+        return None
+
+    path = state_file_for(day)
+    if not path.exists():
+        return None
+
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        log.exception("failed to load history %s", path)
+        return None
+
+    loaded = raw.get("targets") or {}
+    targets = [
+        _public(_hydrate_target(key, t))
+        for key, t in loaded.items()
+        if bool(t.get("confirmed", True))
+    ]
+    targets.sort(key=lambda t: t["arrived_at"] or "")
+
+    by_grade = {g: [] for g in GRADE_ORDER}
+    for t in targets:
+        grade = t["grade"] if t["grade"] in by_grade else "other"
+        by_grade[grade].append(t)
+
+    return {
+        "date": day,
+        "check_interval_seconds": CHECK_INTERVAL_SECONDS,
+        "miss_threshold_count": MISS_THRESHOLD_COUNT,
+        "count": len(targets),
         "grades": GRADE_ORDER,
         "by_grade": by_grade,
         "targets": targets,
@@ -229,27 +392,20 @@ def _ensure_loop() -> None:
 
 
 def _credit_if_due(current: dict, now: datetime) -> None:
-    """在室時間を加算する。"""
+    """在室時間を加算する（不足分のみ）。"""
     if not current["present"]:
         return
-    last = current.get("last_credit_at")
-    if not last:
-        current["last_credit_at"] = now.isoformat()
-        return
-    try:
-        last_dt = datetime.fromisoformat(last)
-        if last_dt.tzinfo is None:
-            last_dt = last_dt.replace(tzinfo=now.tzinfo)
-    except ValueError:
+    last_dt = _parse_dt(current.get("last_credit_at"), now.tzinfo)
+    if last_dt is None:
         current["last_credit_at"] = now.isoformat()
         return
 
     elapsed = (now - last_dt).total_seconds()
-    credits = int(elapsed // PRESENCE_CREDIT_SECONDS)
+    credits = int(elapsed // CHECK_INTERVAL_SECONDS)
     if credits <= 0:
         return
-    current["total_present_seconds"] += credits * PRESENCE_CREDIT_SECONDS
-    advanced = last_dt.timestamp() + credits * PRESENCE_CREDIT_SECONDS
+    current["total_present_seconds"] += credits * CHECK_INTERVAL_SECONDS
+    advanced = last_dt.timestamp() + credits * CHECK_INTERVAL_SECONDS
     current["last_credit_at"] = datetime.fromtimestamp(
         advanced, tz=last_dt.tzinfo
     ).isoformat()
@@ -273,7 +429,7 @@ def _arp_apply_result(key: str, ip: str, mac: str | None) -> None:
         if mac is None:
             current["misses"] += 1
             if current["misses"] >= MISS_THRESHOLD_COUNT:
-                _mark_absent(current, now, "no ARP reply")
+                _mark_absent(current, now, "no ARP reply", backdate_misses=True)
             else:
                 log.info(
                     "%s miss %s/%s (no ARP reply)",
@@ -311,7 +467,6 @@ def _arp_apply_result(key: str, ip: str, mac: str | None) -> None:
             chime = not was_confirmed
         elif mac == expected:
             was_confirmed = bool(current.get("confirmed"))
-            was_present = bool(current["present"])
             if not current.get("confirmed"):
                 current["confirmed"] = True
             if not current["present"]:
@@ -320,6 +475,7 @@ def _arp_apply_result(key: str, ip: str, mac: str | None) -> None:
                 chime = True
             else:
                 current["misses"] = 0
+                current["last_seen_at"] = now.isoformat()
                 log.info("%s present mac=%s", name, mac)
                 chime = not was_confirmed
             _credit_if_due(current, now)
@@ -327,7 +483,7 @@ def _arp_apply_result(key: str, ip: str, mac: str | None) -> None:
             chime = False
             current["misses"] += 1
             if current["misses"] >= MISS_THRESHOLD_COUNT:
-                _mark_absent(current, now, "mac mismatch")
+                _mark_absent(current, now, "mac mismatch", backdate_misses=True)
             else:
                 log.info(
                     "%s miss %s/%s expected=%s got=%s",
@@ -347,6 +503,7 @@ def _arp_apply_result(key: str, ip: str, mac: str | None) -> None:
 
 def _loop() -> None:
     """監視ループを実行する。"""
+    global _last_check_at, _next_check_at
     log.info("monitor loop started")
     while True:
         with _lock:
@@ -374,6 +531,13 @@ def _loop() -> None:
                 mac = None
             _arp_apply_result(key, ip, mac)
 
+        # ARP ラウンド完了 → 定期画面更新のトリガ（接続ではここはリセットしない）
+        with _lock:
+            now = _now()
+            _last_check_at = now.isoformat()
+            _next_check_at = (now + timedelta(seconds=CHECK_INTERVAL_SECONDS)).isoformat()
+            _bump_revision_unlocked()
+
         time.sleep(CHECK_INTERVAL_SECONDS)
 
 
@@ -392,11 +556,15 @@ def start_monitoring(
 ) -> bool | str:
     """監視開始・当日レコード更新。除外 MAC なら False。上限超過なら 'full'。"""
     # MAC は POST では受け取らず、ARP でのみ取得する
+    global _last_check_at
     try:
         learned = arp_request(ip)
     except Exception:
         log.exception("ARP probe failed on connect ip=%s", ip)
         learned = None
+
+    with _lock:
+        _last_check_at = _now().isoformat()
 
     mac_n = normalize_mac(learned) if learned else None
     if is_excluded_mac(mac_n):
@@ -460,10 +628,13 @@ def start_monitoring(
                 "left_at": None,
                 "total_present_seconds": 0,
                 "last_credit_at": now.isoformat(),
+                "last_seen_at": now.isoformat() if confirmed else None,
                 "confirmed": confirmed,
             }
 
         _save_unlocked()
+        # 接続反映用（定期ARPの sleep はリセットしない）
+        _bump_revision_unlocked()
 
     log.info(
         "%s (%s) connected ip=%s mac=%s confirmed=%s",

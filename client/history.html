@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>自動在室管理</title>
+    <title>在室履歴</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -15,11 +15,19 @@
   <body>
     <header class="top">
       <div class="top-left">
-        <h1 class="title">自動在室管理</h1>
-        <p id="subtitle" class="subtitle">最終更新: - ／ 次の確認: -</p>
-        <p id="rules" class="rules">ルールを読み込み中…</p>
+        <h1 class="title">在室履歴</h1>
+        <div class="date-nav" role="group" aria-label="日付の切替">
+          <button type="button" id="prev-day" class="date-nav-btn" aria-label="前の日">
+            ＜
+          </button>
+          <p id="view-date" class="view-date">—</p>
+          <button type="button" id="next-day" class="date-nav-btn" aria-label="次の日">
+            ＞
+          </button>
+        </div>
+        <p id="subtitle" class="subtitle">過去の在室記録を表示します</p>
         <p class="nav-links">
-          <a href="/history">過去の在室履歴を開く</a>
+          <a href="/">リアルタイム在室管理を開く</a>
         </p>
       </div>
       <div class="top-right">
@@ -30,6 +38,6 @@
 
     <main id="boards" class="boards" aria-live="polite"></main>
 
-    <script src="/client/app.js"></script>
+    <script src="/client/history.js"></script>
   </body>
 </html>

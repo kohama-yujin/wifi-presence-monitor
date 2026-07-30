@@ -1,19 +1,36 @@
 from flask import Blueprint, jsonify, request
 
 from app.config import ROUTER_NAME
-from app.monitor import get_status, start_monitoring
+from app.monitor import get_history, get_status, list_history_dates, start_monitoring
 
 api_bp = Blueprint("api", __name__)
 
 
-@api_bp.get("/")
-def index():
+@api_bp.get("/health")
+def health():
     return "running"
 
 
 @api_bp.get("/status")
 def status():
     return jsonify(get_status())
+
+
+@api_bp.get("/history/dates")
+def history_dates():
+    return jsonify({"dates": list_history_dates()})
+
+
+@api_bp.get("/history/<day>")
+def history_day(day: str):
+    data = get_history(day)
+    if data is None:
+        return jsonify({
+            "ok": False,
+            "error": True,
+            "message": "指定日の記録がありません（当日は履歴対象外です）",
+        }), 404
+    return jsonify(data)
 
 
 @api_bp.post("/wifi_connected")

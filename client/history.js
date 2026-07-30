@@ -6,19 +6,20 @@ const GRADE_LABELS = {
   other: "other",
 };
 
-// ARP完了・接続を検知するための短い監視間隔（表示タイミング自体は revision 駆動）
-const WATCH_MS = 1000;
-let watchTimer = null;
-let lastRevision = null;
-let rulesReady = false;
-
 const els = {
+  viewDate: document.getElementById("view-date"),
   subtitle: document.getElementById("subtitle"),
-  rules: document.getElementById("rules"),
   clockDate: document.getElementById("clock-date"),
   clockTime: document.getElementById("clock-time"),
   boards: document.getElementById("boards"),
+  prevDay: document.getElementById("prev-day"),
+  nextDay: document.getElementById("next-day"),
 };
+
+/** @type {string[]} ISO dates, newest first */
+let dates = [];
+/** @type {number} index into dates */
+let dateIndex = 0;
 
 function dash(value) {
   return value == null || value === "" ? "-" : String(value);
@@ -36,6 +37,17 @@ function formatClock() {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
+  });
+}
+
+function formatDayLabel(isoDay) {
+  const d = new Date(`${isoDay}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return isoDay;
+  return d.toLocaleDateString("ja-JP", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    weekday: "short",
   });
 }
 
@@ -57,54 +69,6 @@ function formatDuration(seconds) {
   return `${m}分`;
 }
 
-function formatInterval(seconds) {
-  const s = Math.max(0, Number(seconds) || 0);
-  if (s < 60) return `${s}秒`;
-  if (s < 3600) {
-    const m = s / 60;
-    return Number.isInteger(m) ? `${m}分` : `${parseFloat(m.toFixed(1))}分`;
-  }
-  const h = s / 3600;
-  return Number.isInteger(h) ? `${h}時間` : `${parseFloat(h.toFixed(1))}時間`;
-}
-
-function formatClockTime(iso) {
-  if (!iso) return "-";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "-";
-  return d.toLocaleTimeString("ja-JP", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
-function setSubtitle(status) {
-  const updated = new Date().toLocaleTimeString("ja-JP", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-  const next = formatClockTime(status?.next_check_at);
-  els.subtitle.textContent = `最終更新: ${updated} ／ 次の確認: ${next}`;
-}
-
-function formatRules(status) {
-  const interval = formatInterval(status.check_interval_seconds || 0);
-  const misses = status.miss_threshold_count ?? 2;
-  const lag = Math.max(0, misses);
-  const lagText =
-    lag === 0
-      ? "判定時刻そのまま"
-      : `最初の未応答の直前（判定から約${formatInterval(
-          lag * (status.check_interval_seconds || 0)
-        )}さかのぼり）`;
-  return (
-    `${interval}ごとに在室を確認し、連続${misses}回応答がなければ不在とします。\n` +
-    `帰宅時刻と総在室は${lagText}で記録します。`
-  );
-}
-
 function presenceView(t, missThreshold) {
   const present = !!t.present;
   const misses = Number(t.misses) || 0;
@@ -123,13 +87,12 @@ function presenceView(t, missThreshold) {
   return { rowClass: "row-present", statusClass: "status-present", label: "在室" };
 }
 
-function renderBoards(status) {
-  setSubtitle(status);
-  if (els.rules) {
-    els.rules.textContent = formatRules(status);
-    rulesReady = true;
-  }
+function updateNavButtons() {
+  els.prevDay.disabled = dateIndex >= dates.length - 1;
+  els.nextDay.disabled = dateIndex <= 0;
+}
 
+function renderBoards(status) {
   const grades = status.grades || ["Teacher", "M2", "M1", "B4", "other"];
   const byGrade = status.by_grade || {};
   const missThreshold = status.miss_threshold_count ?? 2;
@@ -139,7 +102,7 @@ function renderBoards(status) {
       const rows = byGrade[grade] || [];
       const body =
         rows.length === 0
-          ? `<p class="empty">今日はまだ来ていません</p>`
+          ? `<p class="empty">この日の記録はありません</p>`
           : `<table>
               <thead>
                 <tr>
@@ -174,30 +137,65 @@ function renderBoards(status) {
     .join("");
 }
 
-async function watch() {
-  try {
-    const res = await fetch("/status", { cache: "no-store" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const status = await res.json();
-    const revision = status.revision;
+function renderEmpty(message) {
+  els.viewDate.textContent = "—";
+  els.subtitle.textContent = message;
+  els.boards.innerHTML = `<p class="history-empty">${message}</p>`;
+  updateNavButtons();
+}
 
-    // 初回、または ARP完了・接続などで revision が変わったときだけ描画
-    if (lastRevision === null || revision !== lastRevision) {
-      lastRevision = revision;
-      renderBoards(status);
-    } else if (!rulesReady && els.rules) {
-      els.rules.textContent = formatRules(status);
-      rulesReady = true;
-    }
-  } catch (err) {
-    els.subtitle.textContent = `最終更新: 失敗`;
-    if (els.rules) els.rules.textContent = `更新失敗: ${err.message}`;
+async function loadDay() {
+  if (!dates.length) {
+    renderEmpty("過去の在室記録はまだありません");
+    els.prevDay.disabled = true;
+    els.nextDay.disabled = true;
+    return;
   }
 
-  clearTimeout(watchTimer);
-  watchTimer = setTimeout(watch, WATCH_MS);
+  const day = dates[dateIndex];
+  els.viewDate.textContent = formatDayLabel(day);
+  updateNavButtons();
+  els.subtitle.textContent = "読み込み中…";
+
+  try {
+    const res = await fetch(`/history/${day}`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const status = await res.json();
+    els.subtitle.textContent = `${status.count ?? 0}名の記録`;
+    renderBoards(status);
+  } catch (err) {
+    els.subtitle.textContent = `読み込み失敗: ${err.message}`;
+    els.boards.innerHTML = "";
+  }
 }
+
+async function init() {
+  try {
+    const res = await fetch("/history/dates", { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    dates = Array.isArray(data.dates) ? data.dates : [];
+    dateIndex = 0;
+    await loadDay();
+  } catch (err) {
+    renderEmpty(`日付一覧の取得に失敗しました: ${err.message}`);
+    els.prevDay.disabled = true;
+    els.nextDay.disabled = true;
+  }
+}
+
+els.prevDay.addEventListener("click", () => {
+  if (dateIndex >= dates.length - 1) return;
+  dateIndex += 1;
+  loadDay();
+});
+
+els.nextDay.addEventListener("click", () => {
+  if (dateIndex <= 0) return;
+  dateIndex -= 1;
+  loadDay();
+});
 
 formatClock();
 setInterval(formatClock, 1000);
-watch();
+init();

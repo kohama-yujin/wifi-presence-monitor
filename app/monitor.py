@@ -101,10 +101,12 @@ def _mark_absent(current: dict, now: datetime, reason: str) -> None:
 
 def _mark_present(current: dict, now: datetime) -> None:
     """在室者になったときの処理。"""
+    was_present = bool(current.get("present"))
     current["present"] = True
     current["left_at"] = None  # 再接続・復帰時は帰宅をクリア
     current["misses"] = 0
-    if not current.get("last_credit_at"):
+    # 不在→在室のときだけ起点を戻す（在室中の再通知では継続）
+    if not was_present or not current.get("last_credit_at"):
         current["last_credit_at"] = now.isoformat()
 
 

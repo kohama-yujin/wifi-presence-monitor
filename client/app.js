@@ -6,7 +6,7 @@ const GRADE_LABELS = {
   other: "other",
 };
 
-// ARP完了・接続を検知するための短い監視間隔（表示タイミング自体は revision 駆動）
+// 接続・切断・加算ループの revision 変化を検知する短い監視間隔
 const WATCH_MS = 1000;
 let watchTimer = null;
 let lastRevision = null;
@@ -57,68 +57,25 @@ function formatDuration(seconds) {
   return `${m}分`;
 }
 
-function formatInterval(seconds) {
-  const s = Math.max(0, Number(seconds) || 0);
-  if (s < 60) return `${s}秒`;
-  if (s < 3600) {
-    const m = s / 60;
-    return Number.isInteger(m) ? `${m}分` : `${parseFloat(m.toFixed(1))}分`;
-  }
-  const h = s / 3600;
-  return Number.isInteger(h) ? `${h}時間` : `${parseFloat(h.toFixed(1))}時間`;
-}
-
-function formatClockTime(iso) {
-  if (!iso) return "-";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "-";
-  return d.toLocaleTimeString("ja-JP", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
 function setSubtitle(status) {
   const updated = new Date().toLocaleTimeString("ja-JP", {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
   });
-  const next = formatClockTime(status?.next_check_at);
-  els.subtitle.textContent = `最終更新: ${updated} ／ 次の確認: ${next}`;
+  els.subtitle.textContent = `最終更新: ${updated}`;
 }
 
-function formatRules(status) {
-  const interval = formatInterval(status.check_interval_seconds || 0);
-  const misses = status.miss_threshold_count ?? 2;
-  const lag = Math.max(0, misses);
-  const lagText =
-    lag === 0
-      ? "判定時刻そのまま"
-      : `最初の未応答の直前（判定から約${formatInterval(
-          lag * (status.check_interval_seconds || 0)
-        )}さかのぼり）`;
+function formatRules(_status) {
   return (
-    `${interval}ごとに在室を確認し、連続${misses}回応答がなければ不在とします。\n` +
-    `帰宅時刻と総在室は${lagText}で記録します。`
+    "Wi‑Fi 接続通知（POST /wifi_connected）で在室、切断通知（POST /wifi_disconnected）で不在とします。\n" +
+    "総在室時間は接続中に加算し、切断時に確定します。"
   );
 }
 
-function presenceView(t, missThreshold) {
-  const present = !!t.present;
-  const misses = Number(t.misses) || 0;
-  const threshold = missThreshold ?? 2;
-
-  if (!present) {
+function presenceView(t) {
+  if (!t.present) {
     return { rowClass: "row-away", statusClass: "status-away", label: "不在" };
-  }
-  if (misses > 0 && misses < threshold) {
-    return {
-      rowClass: "row-present",
-      statusClass: "status-uncertain",
-      label: "不在かも？",
-    };
   }
   return { rowClass: "row-present", statusClass: "status-present", label: "在室" };
 }
@@ -132,7 +89,6 @@ function renderBoards(status) {
 
   const grades = status.grades || ["Teacher", "M2", "M1", "B4", "other"];
   const byGrade = status.by_grade || {};
-  const missThreshold = status.miss_threshold_count ?? 2;
 
   els.boards.innerHTML = grades
     .map((grade) => {
@@ -153,7 +109,7 @@ function renderBoards(status) {
               <tbody>
                 ${rows
                   .map((t) => {
-                    const view = presenceView(t, missThreshold);
+                    const view = presenceView(t);
                     return `<tr class="${view.rowClass}">
                       <td class="${view.statusClass}">${view.label}</td>
                       <td>${dash(t.name)}</td>

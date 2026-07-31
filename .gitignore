@@ -12,9 +12,11 @@ build/
 venv/
 .venv/
 env/
+wifi_env/
 
 # Local config / secrets
 excluded_macs.json
+api_key.json
 presence_state.json
 data/presence/*.json
 !.gitkeep

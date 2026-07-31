@@ -14,6 +14,8 @@ let rulesReady = false;
 
 const els = {
   subtitle: document.getElementById("subtitle"),
+  publicUrl: document.getElementById("public-url"),
+  publicUrlLink: document.getElementById("public-url-link"),
   rules: document.getElementById("rules"),
   clockDate: document.getElementById("clock-date"),
   clockTime: document.getElementById("clock-time"),
@@ -66,6 +68,20 @@ function setSubtitle(status) {
   els.subtitle.textContent = `最終更新: ${updated}`;
 }
 
+function setPublicUrl(status) {
+  if (!els.publicUrl || !els.publicUrlLink) return;
+  const url = typeof status.public_url === "string" ? status.public_url.trim() : "";
+  if (!url) {
+    els.publicUrl.hidden = true;
+    els.publicUrlLink.removeAttribute("href");
+    els.publicUrlLink.textContent = "";
+    return;
+  }
+  els.publicUrl.hidden = false;
+  els.publicUrlLink.href = url;
+  els.publicUrlLink.textContent = url;
+}
+
 function formatRules(_status) {
   return (
     "Wi‑Fi 接続通知（POST /wifi_connected）で在室、切断通知（POST /wifi_disconnected）で不在とします。\n" +
@@ -82,6 +98,7 @@ function presenceView(t) {
 
 function renderBoards(status) {
   setSubtitle(status);
+  setPublicUrl(status);
   if (els.rules) {
     els.rules.textContent = formatRules(status);
     rulesReady = true;
@@ -137,7 +154,10 @@ async function watch() {
     const status = await res.json();
     const revision = status.revision;
 
-    // 初回、または ARP完了・接続などで revision が変わったときだけ描画
+    // 公開 URL は revision と独立に変わる（トンネル起動後）ので毎回更新
+    setPublicUrl(status);
+
+    // 初回、または アプリ更新・接続などで revision が変わったときだけ描画
     if (lastRevision === null || revision !== lastRevision) {
       lastRevision = revision;
       renderBoards(status);

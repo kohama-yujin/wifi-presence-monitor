@@ -10,6 +10,8 @@ EXCLUDED_MACS_FILE = ROOT / "excluded_macs.json"
 API_KEY_FILE = ROOT / "api_key.json"
 # 日付ごとの在室状態を蓄積するフォルダ
 STATE_DIR = ROOT / "data" / "presence"
+# cloudflared Quick Tunnel の公開 URL（起動スクリプトが書き込む）
+TUNNEL_URL_FILE = ROOT / "data" / "tunnel_url.txt"
 # 到着チャイム（WAV が無ければ Windows の SystemAsterisk）
 ARRIVAL_SOUND_ENABLED = True
 ARRIVAL_SOUND_FILE = ROOT / "sounds" / "arrive.wav"
@@ -58,6 +60,26 @@ def is_excluded_mac(mac: str | None) -> bool:
     if not mac:
         return False
     return normalize_mac(mac) in load_excluded_macs()
+
+
+def load_public_tunnel_url() -> str | None:
+    """
+    Quick Tunnel の公開 URL を data/tunnel_url.txt から読む。
+    未作成・空・不正なら None。
+    """
+    if not TUNNEL_URL_FILE.exists():
+        return None
+    try:
+        # PowerShell Set-Content -Encoding utf8 は BOM 付きのため utf-8-sig で読む
+        text = TUNNEL_URL_FILE.read_text(encoding="utf-8-sig").strip()
+    except OSError:
+        return None
+    if not text:
+        return None
+    url = text.split()[0].strip()
+    if not url.startswith("https://"):
+        return None
+    return url
 
 
 def load_api_key() -> str | None:

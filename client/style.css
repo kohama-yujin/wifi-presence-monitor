@@ -64,6 +64,18 @@ body {
   font-size: 0.98rem;
 }
 
+.public-url {
+  margin: 0.4rem 0 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  word-break: break-all;
+}
+
+.public-url a {
+  color: var(--m2-ink);
+  text-underline-offset: 0.15em;
+}
+
 .date-nav {
   display: flex;
   align-items: center;

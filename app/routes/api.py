@@ -3,7 +3,7 @@ from functools import wraps
 
 from flask import Blueprint, jsonify, request
 
-from app.config import load_api_key
+from app.config import load_api_key, load_public_tunnel_url
 from app.monitor import (
     get_history,
     get_status,
@@ -109,10 +109,12 @@ def wifi_connected():
             "ok": False,
             "error": True,
             "message": "同時接続数の上限に達しています",
+            "public_url": load_public_tunnel_url(),
         }), 429
     return jsonify({
         "ok": True,
         "message": "受け付けました",
+        "public_url": load_public_tunnel_url(),
     }), 200
 
 

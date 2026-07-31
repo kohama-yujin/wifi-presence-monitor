@@ -9,6 +9,7 @@ from app.config import (
     GRADE_ORDER,
     MAX_TARGETS,
     STATE_DIR,
+    load_public_tunnel_url,
     normalize_grade,
     state_file_for,
 )
@@ -272,6 +273,7 @@ def get_status() -> dict:
         "by_grade": by_grade,
         "targets": targets,
         "mode": "connect_disconnect",
+        "public_url": load_public_tunnel_url(),
     }
 
 

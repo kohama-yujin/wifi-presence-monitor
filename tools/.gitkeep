@@ -1,0 +1,2 @@
+# cloudflared-windows-amd64.exe をここに置く（任意）
+# または環境変数 CLOUDFLARED_EXE / Downloads 配置でも可

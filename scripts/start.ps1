@@ -7,6 +7,14 @@
   タスクスケジューラからは次のように実行する:
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File "...\scripts\start.ps1"
 
+  失敗時は data\start.log / data\start.err.log を確認する。
+
+  Python の探索順:
+    1. venv\Scripts\python.exe
+    2. wifi_env\Scripts\python.exe
+    3. .venv\Scripts\python.exe
+    4. PATH 上の python（WindowsApps スタブは除外）
+
   cloudflared の場所（優先順）:
     1. 環境変数 CLOUDFLARED_EXE
     2. リポジトリの tools\cloudflared-windows-amd64.exe
@@ -24,13 +32,24 @@ $AppPidFile = Join-Path $RuntimeDir "app.pid"
 $TunnelPidFile = Join-Path $RuntimeDir "cloudflared.pid"
 $AppOutLog = Join-Path $DataDir "app.out.log"
 $AppErrLog = Join-Path $DataDir "app.err.log"
+$StartLog = Join-Path $DataDir "start.log"
+$StartErrLog = Join-Path $DataDir "start.err.log"
 $Port = 5000
 $OriginUrl = "http://127.0.0.1:$Port"
 
 New-Item -ItemType Directory -Force -Path $DataDir, $RuntimeDir | Out-Null
 
 function Write-Info([string]$Message) {
-    Write-Host "[start] $Message"
+    $line = "[start] $Message"
+    Write-Host $line
+    $stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    Add-Content -LiteralPath $StartLog -Value "$stamp $line" -Encoding utf8
+}
+
+function Write-StartError([string]$Message) {
+    Write-Info "ERROR: $Message"
+    $stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    Add-Content -LiteralPath $StartErrLog -Value "$stamp $Message" -Encoding utf8
 }
 
 function Resolve-Cloudflared {
@@ -50,15 +69,29 @@ function Resolve-Cloudflared {
 }
 
 function Resolve-Python {
-    $venvPython = Join-Path $RepoRoot "venv\Scripts\python.exe"
-    if (Test-Path -LiteralPath $venvPython) {
-        return (Resolve-Path -LiteralPath $venvPython).Path
+    $candidates = @(
+        (Join-Path $RepoRoot "venv\Scripts\python.exe"),
+        (Join-Path $RepoRoot "wifi_env\Scripts\python.exe"),
+        (Join-Path $RepoRoot ".venv\Scripts\python.exe")
+    )
+    foreach ($path in $candidates) {
+        if (Test-Path -LiteralPath $path) {
+            return (Resolve-Path -LiteralPath $path).Path
+        }
     }
+
+    # タスクスケジューラでは PATH が狭い。WindowsApps の python スタブは使わない。
     $cmd = Get-Command python -ErrorAction SilentlyContinue
-    if ($cmd) {
+    if (
+        $cmd -and
+        $cmd.Source -and
+        (Test-Path -LiteralPath $cmd.Source) -and
+        ($cmd.Source -notmatch '(?i)\\WindowsApps\\')
+    ) {
         return $cmd.Source
     }
-    throw "Python が見つかりません。先に venv を作成してください。"
+
+    throw "Python が見つかりません。venv または wifi_env を作成し、pip install -r requirements.txt してください。"
 }
 
 function Test-PortOpen([int]$PortNumber) {
@@ -114,76 +147,86 @@ function Find-TunnelUrl {
     return $null
 }
 
-# 前回の残骸を掃除
-Stop-PidFromFile -PidFile $TunnelPidFile -Label "cloudflared"
-Stop-PidFromFile -PidFile $AppPidFile -Label "app"
-Remove-Item -LiteralPath $TunnelUrlFile -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $CloudflaredOutLog, $CloudflaredErrLog -Force -ErrorAction SilentlyContinue
+try {
+    Write-Info "==== start.ps1 begin ===="
+    Write-Info "repo: $RepoRoot"
 
-$Python = Resolve-Python
-$Cloudflared = Resolve-Cloudflared
-Write-Info "repo: $RepoRoot"
-Write-Info "python: $Python"
-Write-Info "cloudflared: $Cloudflared"
+    # 前回の残骸を掃除
+    Stop-PidFromFile -PidFile $TunnelPidFile -Label "cloudflared"
+    Stop-PidFromFile -PidFile $AppPidFile -Label "app"
+    Remove-Item -LiteralPath $TunnelUrlFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $CloudflaredOutLog, $CloudflaredErrLog -Force -ErrorAction SilentlyContinue
 
-if (Test-PortOpen -PortNumber $Port) {
-    Write-Info "ポート $Port は既に使用中です。既存プロセスを利用します。"
-} else {
-    Write-Info "在室管理を起動します"
-    $app = Start-Process -FilePath $Python `
-        -ArgumentList "main.py" `
+    $Python = Resolve-Python
+    $Cloudflared = Resolve-Cloudflared
+    Write-Info "python: $Python"
+    Write-Info "cloudflared: $Cloudflared"
+
+    if (Test-PortOpen -PortNumber $Port) {
+        Write-Info "ポート $Port は既に使用中です。既存プロセスを利用します。"
+    } else {
+        Write-Info "在室管理を起動します"
+        $app = Start-Process -FilePath $Python `
+            -ArgumentList "main.py" `
+            -WorkingDirectory $RepoRoot `
+            -RedirectStandardOutput $AppOutLog `
+            -RedirectStandardError $AppErrLog `
+            -WindowStyle Hidden `
+            -PassThru
+        Set-Content -LiteralPath $AppPidFile -Value $app.Id -Encoding ascii
+
+        $ready = $false
+        for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep -Seconds 1
+            if (Test-PortOpen -PortNumber $Port) {
+                $ready = $true
+                break
+            }
+            if ($app.HasExited) {
+                throw "在室管理の起動に失敗しました。$AppErrLog / $AppOutLog を確認してください。"
+            }
+        }
+        if (-not $ready) {
+            throw "在室管理がポート $Port で応答しません。"
+        }
+        Write-Info "在室管理が起動しました (PID $($app.Id))"
+    }
+
+    Write-Info "cloudflared Quick Tunnel を起動します"
+    $cfArgs = @("tunnel", "--url", $OriginUrl)
+    $cf = Start-Process -FilePath $Cloudflared `
+        -ArgumentList $cfArgs `
         -WorkingDirectory $RepoRoot `
-        -RedirectStandardOutput $AppOutLog `
-        -RedirectStandardError $AppErrLog `
+        -RedirectStandardOutput $CloudflaredOutLog `
+        -RedirectStandardError $CloudflaredErrLog `
         -WindowStyle Hidden `
         -PassThru
-    Set-Content -LiteralPath $AppPidFile -Value $app.Id -Encoding ascii
+    Set-Content -LiteralPath $TunnelPidFile -Value $cf.Id -Encoding ascii
 
-    $ready = $false
-    for ($i = 0; $i -lt 60; $i++) {
+    $url = $null
+    for ($i = 0; $i -lt 90; $i++) {
         Start-Sleep -Seconds 1
-        if (Test-PortOpen -PortNumber $Port) {
-            $ready = $true
+        if ($cf.HasExited) {
+            throw "cloudflared が終了しました。$CloudflaredErrLog / $CloudflaredOutLog を確認してください。"
+        }
+        $url = Find-TunnelUrl
+        if ($url) {
             break
         }
-        if ($app.HasExited) {
-            throw "在室管理の起動に失敗しました。$AppErrLog / $AppOutLog を確認してください。"
-        }
     }
-    if (-not $ready) {
-        throw "在室管理がポート $Port で応答しません。"
+
+    if (-not $url) {
+        throw "Quick Tunnel URL を取得できませんでした。ログを確認してください。"
     }
-    Write-Info "在室管理が起動しました (PID $($app.Id))"
+
+    # PowerShell 5.1 の utf8 は BOM 付きなので、BOM なし UTF-8 で書く
+    [System.IO.File]::WriteAllText($TunnelUrlFile, $url + [Environment]::NewLine)
+    Write-Info "公開 URL: $url"
+    Write-Info "完了（プロセスは常駐します）"
+    Write-Info "==== start.ps1 end ===="
+    exit 0
+} catch {
+    Write-StartError $_.Exception.Message
+    Write-Info "==== start.ps1 failed ===="
+    exit 1
 }
-
-Write-Info "cloudflared Quick Tunnel を起動します"
-$cfArgs = @("tunnel", "--url", $OriginUrl)
-$cf = Start-Process -FilePath $Cloudflared `
-    -ArgumentList $cfArgs `
-    -WorkingDirectory $RepoRoot `
-    -RedirectStandardOutput $CloudflaredOutLog `
-    -RedirectStandardError $CloudflaredErrLog `
-    -WindowStyle Hidden `
-    -PassThru
-Set-Content -LiteralPath $TunnelPidFile -Value $cf.Id -Encoding ascii
-
-$url = $null
-for ($i = 0; $i -lt 90; $i++) {
-    Start-Sleep -Seconds 1
-    if ($cf.HasExited) {
-        throw "cloudflared が終了しました。$CloudflaredErrLog / $CloudflaredOutLog を確認してください。"
-    }
-    $url = Find-TunnelUrl
-    if ($url) {
-        break
-    }
-}
-
-if (-not $url) {
-    throw "Quick Tunnel URL を取得できませんでした。ログを確認してください。"
-}
-
-# PowerShell 5.1 の utf8 は BOM 付きなので、BOM なし UTF-8 で書く
-[System.IO.File]::WriteAllText($TunnelUrlFile, $url + [Environment]::NewLine)
-Write-Info "公開 URL: $url"
-Write-Info "完了（このウィンドウは閉じて構いません。プロセスは常駐します）"

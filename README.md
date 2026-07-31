@@ -36,6 +36,8 @@ python -m venv venv
 python -m pip install -r requirements.txt
 ```
 
+仮想環境名は `venv` でも `wifi_env` でも可（`start.ps1` は両方を探します）。
+
 API キー（必須）:
 
 ```powershell
@@ -289,9 +291,11 @@ cloudflared（公開する場合）の置き場所（優先順）:
 
 ## タスクスケジューラ（PC 起動時の自動開始）
 
+`start.ps1` は完了後に終了し、Flask / cloudflared は裏で常駐します。
+
 ### 事前準備
 
-1. `venv` 作成と `pip install -r requirements.txt` 済み
+1. `venv` または `wifi_env` を作成し `pip install -r requirements.txt` 済み
 2. `api_key.json` を設定済み
 3. cloudflared を `tools\` などに配置
 4. 手動で一度確認:
@@ -303,30 +307,51 @@ cd path\to\wifi-presence-monitor
 .\scripts\stop.ps1
 ```
 
-### タスクの作成
+### かんたん登録（推奨）
 
-1. 「タスク スケジューラ」を開く
-2. 「タスクの作成」（「基本タスク」ではない）
-3. **全般**
-   - 名前例: `WiFi Presence Monitor`
+```powershell
+cd path\to\wifi-presence-monitor
+.\scripts\register-task.ps1
+```
+
+- タスク名: `WiFi Presence Monitor`
+- トリガー: ログオン時 + 60 秒遅延（ネットワーク待ち）
+- 削除: `.\scripts\register-task.ps1 -Unregister`
+
+登録後の手動実行:
+
+```powershell
+Start-ScheduledTask -TaskName "WiFi Presence Monitor"
+```
+
+### GUI で作る場合
+
+1. 「タスク スケジューラ」→「タスクの作成」（基本タスクではない）
+2. **全般**
+   - 名前: `WiFi Presence Monitor`
    - 「ユーザーがログオンしているときのみ実行」
-   - 必要なら「最上位の特権で実行する」（通常は不要）
-   - 構成: Windows 10
-4. **トリガー**
-   - 「ログオン時」（必要なら 30 秒〜1 分の遅延）
-5. **操作**
-   - プログラム/スクリプト: `powershell.exe`
-   - 引数の追加:  
+   - 「最上位の特権で実行する」は通常オフ
+3. **トリガー**
+   - 「ログオン時」＋ **1 分程度の遅延**（ネット未接続だとトンネル取得に失敗しやすい）
+4. **操作**
+   - プログラム: `powershell.exe`
+   - 引数:  
      `-NoProfile -ExecutionPolicy Bypass -File "C:\Users\<あなた>\MyTools\wifi-presence-monitor\scripts\start.ps1"`
-6. **設定**
-   - 「タスクを停止するまでの時間」はオフ（常駐）
+5. **設定**
+   - 「タスクを停止するまでの時間」を**オフ**（または十分長く）
+   - 「要求時に実行中のタスクを停止する」はそのままで可（`start.ps1` 自体は数分で終わる）
 
-### 確認・停止
+### 確認・失敗時
 
-- タスクを右クリック → 「実行」
-- `http://127.0.0.1:5000/` で公開 URL を確認
-- 失敗時は `data\app.err.log` / `data\cloudflared.err.log`
-- 停止: `.\scripts\stop.ps1`
+| 確認 | 場所 |
+| --- | --- |
+| タスクの最終実行結果 | タスクスケジューラの履歴 / 前回の実行結果 |
+| 起動スクリプト全体 | `data\start.log` |
+| 起動失敗メッセージ | `data\start.err.log` |
+| Flask | `data\app.err.log` |
+| cloudflared | `data\cloudflared.err.log` |
+
+停止: `.\scripts\stop.ps1`
 
 固定の公開 URL が必要なら Cloudflare の名前付きトンネルを検討してください（このリポジトリの `start.ps1` は Quick Tunnel 向けです）。
 
@@ -353,7 +378,8 @@ data/
     2026-07-31.json
   tunnel_url.txt          # Quick Tunnel の公開 URL（gitignore）
   runtime/                # app / cloudflared の PID
-  *.log                   # 起動ログ
+  start.log / start.err.log  # start.ps1（タスクスケジューラ向け）
+  app.*.log / cloudflared.*.log
 ```
 
 ---
@@ -378,3 +404,4 @@ data/
 | 切断しても在室のまま | 切断オートメーション・保存 URL・API キー |
 | 401 / 503 | `api_key.json` の有無とショートカットの `api_key` 一致 |
 | 音が鳴らない | `ARRIVAL_SOUND_ENABLED`、PC の音量、`sounds/arrive.wav` |
+| タスクスケジューラで起動しない | `data\start.err.log` を見る。多い原因: `venv`/`wifi_env` 未作成、cloudflared 未配置、ログオン直後でネット未接続（遅延を付ける）、引数のパス誤り |

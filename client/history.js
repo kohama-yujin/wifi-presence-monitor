@@ -69,20 +69,9 @@ function formatDuration(seconds) {
   return `${m}分`;
 }
 
-function presenceView(t, missThreshold) {
-  const present = !!t.present;
-  const misses = Number(t.misses) || 0;
-  const threshold = missThreshold ?? 2;
-
-  if (!present) {
+function presenceView(t) {
+  if (!t.present) {
     return { rowClass: "row-away", statusClass: "status-away", label: "不在" };
-  }
-  if (misses > 0 && misses < threshold) {
-    return {
-      rowClass: "row-present",
-      statusClass: "status-uncertain",
-      label: "不在かも？",
-    };
   }
   return { rowClass: "row-present", statusClass: "status-present", label: "在室" };
 }
@@ -95,7 +84,6 @@ function updateNavButtons() {
 function renderBoards(status) {
   const grades = status.grades || ["Teacher", "M2", "M1", "B4", "other"];
   const byGrade = status.by_grade || {};
-  const missThreshold = status.miss_threshold_count ?? 2;
 
   els.boards.innerHTML = grades
     .map((grade) => {
@@ -116,7 +104,7 @@ function renderBoards(status) {
               <tbody>
                 ${rows
                   .map((t) => {
-                    const view = presenceView(t, missThreshold);
+                    const view = presenceView(t);
                     return `<tr class="${view.rowClass}">
                       <td class="${view.statusClass}">${view.label}</td>
                       <td>${dash(t.name)}</td>

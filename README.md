@@ -1,42 +1,19 @@
 # Wi‑Fi Presence Monitor（在室管理）
 
-研究室 LAN 上の端末から接続通知を受け取り、ARP で在席を監視し、在室状況を Web で表示するツールです。
+iPhone ショートカットなどから接続／切断通知を受け取り、在室状況を Web で表示するツールです。
 
-- iPhone ショートカットなどから `POST /wifi_connected`
-- サーバが対象 IP へ ARP Request（Npcap + Scapy）
+- `POST /wifi_connected` で在室開始
+- `POST /wifi_disconnected` で不在
 - `/` で学年別の在室ボードをリアルタイム表示
 - `/history` で過去日の在室履歴を表示（日付切替）
 - 到着時にサーバでチャイム再生
 - 在室記録は日付ごとに `data/presence/` へ保存
+- Cloudflare Quick Tunnel などで学外公開も可能
 
 ## 必要な環境
 
-- Windows（管理者権限で起動）
+- Windows
 - Python 3.10+
-- [Npcap](https://npcap.com/)（L2 ARP 送受信に必須）
-
-## Npcap の導入
-
-Scapy の ARP（`Ether` + `srp`）には Npcap が必要です。未導入だと次のエラーになります。
-
-```text
-RuntimeError: Sniffing and sending packets is not available at layer 2:
-winpcap is not installed.
-```
-
-### 手順
-
-1. [Npcap ダウンロード](https://npcap.com/#download) からインストーラを入手する  
-2. **管理者として実行**する  
-3. インストール時に次を有効にする  
-   - **Install Npcap in WinPcap API-compatible Mode**（Scapy 用に必須）  
-4. インストール後、**ターミナル / Cursor をいったん閉じて開き直す**  
-5. 本アプリは **管理者権限の PowerShell** で起動する  
-
-補足:
-
-- WinPcap が残っている場合はアンインストールし、Npcap のみにする  
-- 学校・共用 PC ではポリシーでインストールできないことがあります  
 
 ## セットアップ
 
@@ -44,14 +21,14 @@ winpcap is not installed.
 cd path\to\wifi-presence-monitor
 python -m venv venv
 .\venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
-除外 MAC リスト（任意）:
+API キー（必須・共有パスワード）:
 
 ```powershell
-copy excluded_macs.example.json excluded_macs.json
-# excluded_macs.json を編集
+copy api_key.example.json api_key.json
+# api_key.json の api_key を長いランダム文字列に書き換える
 ```
 
 到着チャイム用 WAV（任意）:
@@ -61,12 +38,16 @@ copy excluded_macs.example.json excluded_macs.json
 
 ## 起動
 
-**管理者権限**の PowerShell で:
-
 ```powershell
 cd path\to\wifi-presence-monitor
 .\venv\Scripts\Activate.ps1
 python main.py
+```
+
+学外公開の例（Quick Tunnel）:
+
+```powershell
+.\cloudflared-windows-amd64.exe tunnel --url http://127.0.0.1:5000
 ```
 
 | URL | 内容 |
@@ -77,6 +58,30 @@ python main.py
 | `http://<PCのIP>:5000/status` | 当日の状態 JSON |
 | `http://<PCのIP>:5000/history/dates` | 過去日の一覧 JSON |
 | `http://<PCのIP>:5000/history/<YYYY-MM-DD>` | 指定日の在室 JSON |
+| `POST /wifi_connected` | 在室開始 |
+| `POST /wifi_disconnected` | 不在 |
+| `POST /test_post` | 受信確認用（在室登録なし） |
+
+## API キー（共有パスワード）
+
+すべての **POST** に API キーが必要です（GET の画面・`/status` などは不要）。
+
+渡し方（どれか1つ）:
+
+| 方法 | 例 |
+| --- | --- |
+| JSON 本文 | `"api_key": "あなたの秘密文字列"` |
+| ヘッダ | `X-Api-Key: あなたの秘密文字列` |
+| ヘッダ | `Authorization: Bearer あなたの秘密文字列` |
+
+設定:
+
+```powershell
+copy api_key.example.json api_key.json
+# api_key.json の値を長いランダム文字列に変更
+```
+
+未設定のまま POST すると `503`、キー不一致・未送信は `401` です。`api_key.json` は gitignore 対象です。
 
 ## 接続通知 API
 
@@ -86,7 +91,8 @@ python main.py
 ```json
 {
   "name": "山田太郎",
-  "grade": "M2"
+  "grade": "M2",
+  "api_key": "あなたの秘密文字列"
 }
 ```
 
@@ -94,8 +100,9 @@ python main.py
 | --- | --- | --- |
 | `name` | はい | 氏名 |
 | `grade` | はい | `Teacher` / `M2` / `M1` / `B4` など。それ以外は `other` |
+| `api_key` | はい※ | 共有キー（ヘッダでも可） |
 
-MAC は POST では受け取りません。接続元 IP に対する ARP で取得し、除外判定にも使います。
+当日レコードは **氏名 + 学年** で識別します。
 
 ### レスポンス例
 
@@ -104,120 +111,110 @@ MAC は POST では受け取りません。接続元 IP に対する ARP で取�
 ```
 
 ```json
-{"ok": true, "ignored": true, "message": "C3-503のルーターに接続してください"}
-```
-
-```json
-{"ok": true, "message": "確認中です"}
+{"ok": false, "error": true, "message": "APIキーが無効です"}
 ```
 
 ```json
 {"ok": false, "error": true, "message": "name と grade は必須です"}
 ```
 
-IP は `request.remote_addr`（通知元）を使います。サーバと**同じ LAN** である必要があります（別ルータ配下では ARP 監視できません）。
+```json
+{"ok": false, "error": true, "message": "同時接続数の上限に達しています"}
+```
+
+## 切断通知 API
+
+`POST /wifi_disconnected`  
+`Content-Type: application/json`
+
+```json
+{
+  "name": "山田太郎",
+  "grade": "M2",
+  "api_key": "あなたの秘密文字列"
+}
+```
+
+### レスポンス例
+
+```json
+{"ok": true, "message": "不在にしました"}
+```
+
+```json
+{"ok": true, "ignored": true, "message": "当日の在室記録が見つかりません"}
+```
+
+```json
+{"ok": true, "ignored": true, "message": "すでに不在です"}
+```
 
 ## iPhone からの自動通知（ショートカット + オートメーション）
 
-研究室 Wi‑Fi に接続したとき、ショートカットから `POST /wifi_connected` を送る設定例です。  
-（SSID・サーバ IP など環境固有の値はプレースホルダにしています。実環境の値に置き換えてください。）
+研究室 Wi‑Fi の接続／切断で POST する設定例です。  
+サーバ URL は学内 IP または Quick Tunnel の HTTPS URL に置き換えてください。
 
-### 1. ショートカットを作る
+### 1. 接続ショートカット
 
-1. 標準アプリの「ショートカット」を開く  
-2. 「すべてのショートカット」右上の「+」を押す  
-3. 「アクションを検索」に「待機」と入力し、「5秒」と指定する  
-4. 「アクションを検索」に「URLの内容を取得」と入力して選択し、待機の下に配置する  
-5. 「URL」に次を入力する  
+1. 「ショートカット」で新規作成  
+2. 「待機」5秒 → 「URLの内容を取得」  
+3. URL: `https://<公開URL>/wifi_connected`（または `http://<PCのIP>:5000/wifi_connected`）  
+4. 方法: POST / 本文を要求: JSON  
 
-   `http://<PCのIP>:5000/wifi_connected`
+| キー | テキスト |
+| --- | --- |
+| `name` | 自分の氏名 |
+| `grade` | 学年（`Teacher` / `M2` / `M1` / `B4` など） |
+| `api_key` | `api_key.json` と同じ共有キー |
 
-6. 横の「>」を展開し、次のように設定する  
+5. 名前を付ける（例: 在室・接続）
 
-   | 項目 | 設定 |
-   | --- | --- |
-   | 方法 | POST |
-   | ヘッダ | 何も入力しない |
-   | 本文を要求 | JSON |
+### 2. 切断ショートカット
 
-7. 「新規フィールドを追加」で「テキスト」を選び、次の 2 つを追加する  
+接続と同様に作り、URL だけ次にする:
 
-   | キー | テキスト |
-   | --- | --- |
-   | `name` | 自分の氏名 |
-   | `grade` | 学年（`Teacher` / `M2` / `M1` / `B4` など） |
+`https://<公開URL>/wifi_disconnected`
 
-8. 設定が終わったら、必ず**対象の研究室 Wi‑Fi**に接続してから、右下の「▶」で実行する  
-9. 「受け付けました」と表示されれば成功  
-10. 画面上部で名前やアイコンを好きに決める（例: 在室管理）
+本文の `name` / `grade` は接続と同じ。
 
-### 2. オートメーションで Wi‑Fi 接続時に実行する
+### 3. オートメーション
 
-1. ショートカット画面に戻り、下部メニューから「オートメーション」を選ぶ  
-2. 右上の「+」を押す  
-3. 「Wi-Fi」を選び、次のように設定する  
+| トリガー | 実行するショートカット |
+| --- | --- |
+| Wi‑Fi「対象ネットワーク」**参加済み** | 接続ショートカット |
+| Wi‑Fi「対象ネットワーク」**切断** | 切断ショートカット |
 
-   | 項目 | 設定 |
-   | --- | --- |
-   | ネットワーク | 対象の研究室 Wi‑Fi（`ROUTER_NAME` のルーター側） |
-   | 条件 | 参加済み |
-   | 接続が中断した後に実行 | ON |
-   | 実行タイミング | すぐに実行 |
-
-4. 右上の「次へ」を押し、「マイショートカット」から先ほど作ったショートカットを選ぶ  
-
-これで対象 Wi‑Fi に接続されると自動で在室管理に登録されます。  
-結果は在室管理画面（`http://<PCのIP>:5000/`）から確認できます。
+- ネットワークは研究室 Wi‑Fi に限定する  
+- 「すぐに実行」を選ぶ  
+- ロック中はオートメーションが遅延・スキップされることがある  
 
 ## 在室ボード（`/`）
 
 表示順: **Teacher（灰）→ M2（薄青）→ M1（黄土）→ B4（薄緑）→ other（薄赤）**
-
-各行:
 
 | 列 | 内容 |
 | --- | --- |
 | 状態 | 在室 / 不在 |
 | 氏名 | `name` |
 | 到着 | 当日最初の接続時刻 |
-| 帰宅 | 不在になった時刻（デフォルト `-`、再到着で `-` に戻る） |
-| 総在室 | 当日の在室時間（`CHECK_INTERVAL_SECONDS` 単位で加算。1時間以上は `〇時間〇分`） |
+| 帰宅 | 切断通知の時刻（再接続で `-` に戻る） |
+| 総在室 | 当日の在室時間（接続中に加算、切断時に確定） |
 
 - 不在になっても当日の行は残る  
 - 日付が変わると当日ボードはリセット（過去ファイルは残る）  
-- 画面の更新間隔はサーバの `CHECK_INTERVAL_SECONDS` に追従  
-- 「過去の在室履歴を開く」から `/history` へ移動  
 
 ## 在室履歴（`/history`）
 
 `data/presence/` に保存された**過去日**の記録を表示します（当日は含めません）。
 
-- `＜` / `＞` で日付を切替  
-- 「リアルタイム在室管理を開く」から `/` へ移動  
-
 ## 主な設定（`app/config.py`）
 
 | 定数 | 意味 |
 | --- | --- |
-| `CHECK_INTERVAL_SECONDS` | ARP 監視の間隔（秒）。総在室時間の加算単位も兼ねる |
-| `MISS_THRESHOLD_COUNT` | 連続ミスで不在とみなす回数 |
-| `MAX_TARGETS` | 同時監視のソフト上限 |
-| `ROUTER_NAME` | 除外 MAC 時の案内文に使う名前 |
+| `CHECK_INTERVAL_SECONDS` | 在室時間の画面反映・加算ループ間隔（秒） |
+| `MAX_TARGETS` | 同時在室のソフト上限 |
 | `ARRIVAL_SOUND_ENABLED` | 到着チャイムの ON/OFF |
 | `ARRIVAL_SOUND_FILE` | チャイム WAV パス |
-
-## 除外 MAC（`excluded_macs.json`）
-
-研究室ルーター以外からの接続を無視したい端末の MAC を列挙します。
-
-```json
-[
-  "aa:bb:cc:dd:ee:ff"
-]
-```
-
-- 除外時は表に載せず、ルーター接続を案内するメッセージを返す  
-- すでに正しい接続で当日登録済みの行は消さない  
 
 ## データ保存
 
@@ -228,45 +225,17 @@ data/presence/
   ...
 ```
 
-日付ごとに蓄積されます。アプリ再起動後も当日分を読み込みます。
-
-## ディレクトリ構成
-
-```text
-wifi-presence-monitor/
-  main.py                 # 起動入口
-  requirements.txt
-  excluded_macs.json      # ローカル設定（gitignore）
-  app/
-    config.py
-    arp.py
-    monitor.py
-    sound.py
-    routes/
-      api.py
-      client.py
-  client/                 # 画面の静的ファイル
-    index.html            # リアルタイム（/）
-    app.js
-    history.html          # 過去履歴（/history）
-    history.js
-    style.css
-  data/presence/          # 日付別の在室記録
-  sounds/                 # arrive.wav（任意）
-```
-
 ## 注意事項
 
-- ARP 送信には **Npcap** と **管理者権限** が必要です  
-- 対象は同一 L2/同一 LAN の端末のみです  
-- 同時監視の目安は環境によりますが、ソフト上限は `MAX_TARGETS`（既定 20）です  
-- Flask 開発サーバ想定です。本番常駐が必要なら別途サービス化してください  
+- 不在は **切断 POST が届いたとき** に確定します（届かないと在室のまま）  
+- トンネル経由でも接続／切断 POST は動作します（ARP 不要）  
+- ソフト上限は `MAX_TARGETS`（既定 20）  
+- Flask 開発サーバ想定です  
 
 ## トラブルシュート
 
 | 症状 | 確認すること |
 | --- | --- |
-| layer 2 / winpcap エラー | Npcap 導入・WinPcap 互換・端末再起動 |
-| ARP が常に失敗 | 管理者で起動しているか、同一 LAN か |
-| 除外なのに「受け付けました」 | 接続時 ARP で MAC が取れていない可能性。Npcap・管理者起動・同一 LAN を確認 |
+| POST が届かない | サーバ起動・トンネル URL・ショートカットの URL |
+| 切断しても在室のまま | 切断オートメーション・`/wifi_disconnected` の URL |
 | 音が鳴らない | `ARRIVAL_SOUND_ENABLED`、PC の音量、`sounds/arrive.wav` |

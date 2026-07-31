@@ -2,15 +2,12 @@ import json
 import logging
 from pathlib import Path
 
-CHECK_INTERVAL_SECONDS = 300
-ARP_TIMEOUT_SECONDS = 2
-MISS_THRESHOLD_COUNT = 2
+CHECK_INTERVAL_SECONDS = 60
 MAX_TARGETS = 20
-# 除外 MAC 通知時に案内するルーター名
-ROUTER_NAME = "C3-503"
 
 ROOT = Path(__file__).resolve().parents[1]
 EXCLUDED_MACS_FILE = ROOT / "excluded_macs.json"
+API_KEY_FILE = ROOT / "api_key.json"
 # 日付ごとの在室状態を蓄積するフォルダ
 STATE_DIR = ROOT / "data" / "presence"
 # 到着チャイム（WAV が無ければ Windows の SystemAsterisk）
@@ -61,3 +58,24 @@ def is_excluded_mac(mac: str | None) -> bool:
     if not mac:
         return False
     return normalize_mac(mac) in load_excluded_macs()
+
+
+def load_api_key() -> str | None:
+    """
+    共有 API キーを api_key.json から読み込む。
+    未設定・空なら None。
+    """
+    if not API_KEY_FILE.exists():
+        return None
+    try:
+        with API_KEY_FILE.open(encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    key = raw.get("api_key")
+    if not isinstance(key, str):
+        return None
+    key = key.strip()
+    return key or None

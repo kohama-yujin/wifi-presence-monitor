@@ -103,7 +103,7 @@ def wifi_connected():
             "message": "name と grade は必須です",
         }), 400
 
-    result = start_monitoring(name, grade, request.remote_addr)
+    result = start_monitoring(name, grade)
     if result == "full":
         return jsonify({
             "ok": False,

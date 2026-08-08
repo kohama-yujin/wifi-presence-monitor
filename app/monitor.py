@@ -49,8 +49,6 @@ def _public(t: dict) -> dict:
     return {
         "name": t["name"],
         "grade": t["grade"],
-        "ip": t["ip"],
-        "mac": t["mac"],
         "present": t["present"],
         "monitoring": t["monitoring"],
         "misses": t["misses"],
@@ -66,8 +64,6 @@ def _target_payload(t: dict) -> dict:
         "key": t["key"],
         "name": t["name"],
         "grade": t["grade"],
-        "ip": t["ip"],
-        "mac": t["mac"],
         "present": t["present"],
         "monitoring": t["monitoring"],
         "misses": t["misses"],
@@ -186,8 +182,6 @@ def _hydrate_target(key: str, t: dict) -> dict:
         "key": t.get("key") or key,
         "name": t.get("name") or "unknown",
         "grade": normalize_grade(t.get("grade")),
-        "ip": t.get("ip"),
-        "mac": t.get("mac"),
         "present": bool(t.get("present")),
         "monitoring": bool(t.get("monitoring", True)),
         "misses": int(t.get("misses") or 0),
@@ -383,11 +377,7 @@ def resume_monitoring() -> None:
         _ensure_loop()
 
 
-def start_monitoring(
-    name: str,
-    grade: str,
-    ip: str | None = None,
-) -> bool | str:
+def start_monitoring(name: str, grade: str) -> bool | str:
     """
     在室開始（POST /wifi_connected）。
     name + grade で当日レコードを更新する。
@@ -426,8 +416,8 @@ def start_monitoring(
             prev["key"] = key
             prev["name"] = name
             prev["grade"] = grade_n
-            if ip:
-                prev["ip"] = ip
+            prev.pop("ip", None)
+            prev.pop("mac", None)
             prev["confirmed"] = True
             if not prev.get("arrived_at"):
                 prev["arrived_at"] = now.isoformat()
@@ -438,8 +428,6 @@ def start_monitoring(
                 "key": key,
                 "name": name,
                 "grade": grade_n,
-                "ip": ip,
-                "mac": None,
                 "monitoring": True,
                 "misses": 0,
                 "present": True,
@@ -454,7 +442,7 @@ def start_monitoring(
         _save_unlocked()
         _bump_revision_unlocked()
 
-    log.info("%s (%s) connected ip=%s", name, grade_n, ip or "-")
+    log.info("%s (%s) connected", name, grade_n)
     _ensure_loop()
     if is_new or was_absent:
         play_arrival_sound()
